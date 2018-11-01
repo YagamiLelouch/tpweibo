@@ -31,7 +31,7 @@
 
 #### 安装方法
 
-1. Clone仓库：[git@github.com:wenshao0602/Tp-weibo.git](git@github.com:wenshao0602/Tp-weibo.git)
+1. Clone仓库：[https://github.com/YagamiLelouch/tpweibo.git](https://github.com/YagamiLelouch/tpweibo.git)
 2. 将Clone下来的文件夹放入Apache的WWW文件夹
 3. 安装Sql语句到数据库，数据库名为test
 4. 在浏览其中输入Apache的访问地址，访问Clone的文件夹即可访问网站
