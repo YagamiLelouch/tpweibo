@@ -1,0 +1,242 @@
+<?php
+namespace Home\Model;
+use Think\Model;
+
+class UserModel extends Model\RelationModel {
+	
+	//批量验证
+	//protected $patchValidate = true;
+	
+	//用户表自动验证,各种验证方法
+	protected $_validate = array(
+		//-1,'帐号长度不合法！'正则
+		array('username', '/^[^@]{2,20}$/i', -1, self::EXISTS_VALIDATE),
+		//-2,'密码长度不合法！'length
+		array('password', '6,30', -2, self::EXISTS_VALIDATE,'length'),
+		//-3,'密码和密码确认不一致！'confirm
+		array('repassword', 'password', -3, self::EXISTS_VALIDATE,'confirm'),
+		//-4,'邮箱格式不正确！'email
+		array('email', 'email', -4, self::EXISTS_VALIDATE),
+	
+		//-5,'帐号被占用！'unique
+		array('username', '', -5, self::EXISTS_VALIDATE, 'unique', self::MODEL_INSERT),
+		//-6,'邮箱被占用！'unique
+		array('email', '', -6, self::EXISTS_VALIDATE, 'unique', self::MODEL_INSERT),
+	
+		//-7,'验证码错误'自定义function,
+		array('verify', 'check_verify', -7, self::EXISTS_VALIDATE, 'function'),
+	
+		//-8,登录用户名长度不合法length
+		array('login_username', '2,50', -8, self::EXISTS_VALIDATE,'length'),
+		//noemail,判断登录用户名是否是邮箱. 返回错误为自定义的noemail
+		array('login_username', 'email', 'noemail', self::EXISTS_VALIDATE),
+	);
+	
+	//用户表自动完成
+	protected $_auto = array(
+	    //password用sha1加密
+		array('password', 'sha1', self::MODEL_BOTH, 'function'),
+		//time函数对创建时间加密
+		array('create', 'time', self::MODEL_INSERT, 'function'),
+	);
+
+    //一对一关联用户
+    protected $_link = array(
+        //extend为user表新增字段
+        'extend'=>array(
+            //一对一
+            'mapping_type'=>self::HAS_ONE,
+            //关联的数据库名
+            'class_name'=>'UserExtend',
+            //关联的数据库键
+            'foreign_key'=>'uid',
+            //自出现UserExtend表中的intro
+            'mapping_fields'=>'intro',
+        ),
+    );
+	
+	//验证占用字段
+	public function checkField($field, $type) {
+		$data = array();
+		switch ($type) {
+			case 'username' : 
+				$data['username'] = $field;
+				break;
+			case 'email' : 
+				$data['email'] = $field;
+				break;
+			case 'verify' : 
+				$data['verify'] = $field;
+				break;
+			default:
+				return 0;
+		}
+		//创建数据的时候,自动执行自动验证功能,数据存在就返回错误
+		return $this->create($data) ? 1 : $this->getError();
+	}
+	
+	//注册一条用户
+	public function register($username, $password, $repassword, $email, $verify) {
+		$data = array(
+			'username'=>$username,
+			'password'=>$password,
+			'repassword'=>$repassword,
+			'email'=>$email,
+			'verify'=>$verify,
+		);
+		if ($this->create($data)) {
+		    //add时只会添加和数据库user对应的字段,其他的不会
+			$uid = $this->add();
+			return $uid ? $uid : 0;
+		} else {
+			return $this->getError();
+		}
+	}
+	
+	//登录用户
+	public function login($username, $password, $auto) {
+		$data = array(
+			'login_username'=>$username,
+			'password'=>$password,
+		);
+		
+		//where条件
+		$map = array();
+		
+		
+		if ($this->create($data)) {
+			//这里采用邮箱登录方式
+			$map['email'] = $username;
+		} else {
+			if ($this->getError() == 'noemail') {
+				//这里采用帐号登录方式
+				$map['username'] = $username;
+			} else {
+				return $this->getError();
+			}
+		}
+		
+		//验证密码
+		$user = $this->field('id,username,password')->where($map)->find();
+		if ($user['password'] == sha1($password)) {
+			
+			//登录验证后写入登录信息
+			$update = array(
+				'id'=>$user['id'],
+				'last_login'=>NOW_TIME,
+				'last_ip'=>get_client_ip(1),
+			);
+			$this->save($update);
+			
+			//将记录写入到cookie和session中去
+			$auth = array(
+				'id'=>$user['id'],
+				'username'=>$user['username'],
+				'last_login'=>NOW_TIME,
+			);
+			
+			//写入到session,自定义session名user_auth
+			session('user_auth', $auth);
+			
+			//将用户名加密写入cookie
+			if ($auto == 'on') {
+                /*
+                 * cookie名称
+                 * 内容
+                 * 时间
+                 */
+                //内容部分用"."连接数据
+				cookie('auto', encryption($user['username'].'|'.get_client_ip()), 3600 * 24 * 30);
+			}
+			
+			
+			return $user['id'];
+		} else {
+			return -9;		//密码不正确
+		}
+	}
+
+    //通过一对一关联获取用户信息
+    //显示没有域名的主页,  显示个人资料
+    public function getUser($id = 0) {
+        if ($id == 0) {
+            $map['id'] = session('user_auth')['id'];
+        } else {
+            $map['id'] = $id;
+        }
+        $user = $this->relation(true)->field('id,username,email,face,domain')->where($map)->find();
+        if (!is_array($user['extend'])) {
+            $UserExtend = M('UserExtend');
+            $data = array(
+                'uid'=>$map['id'],
+            );
+            $UserExtend->add($data);
+        }
+        return $user;
+    }
+
+    //通过一对一关联修改用户资料
+    public function updateUser($email, $intro) {
+        $map['id'] = session('user_auth')['id'];
+        $data = array(
+            'email'=>$email,
+            'extend'=>array(
+                'intro'=>$intro
+            ),
+        );
+        return $this->relation(true)->where($map)->save($data);
+    }
+
+    //更新个人头像
+    public function updateFace($face) {
+        $data = array(
+            'face'=>$face,
+        );
+        $map['id'] = session('user_auth')['id'];
+        return $this->where($map)->save($data);
+    }
+
+    //获取个人头像
+    public function getFace() {
+        $map['id'] = session('user_auth')['id'];
+        return json_decode($this->field('face')->where($map)->find()['face']);
+    }
+
+    //通过一对一关联获取用户信息
+    public function getUser2($domain) {
+        $map['domain'] = $domain;
+        $user = $this->relation(true)->field('id,username,email,face')->where($map)->find();
+        return $user;
+    }
+
+    //设置域名用到
+    public function getUser3($username) {
+        $map['username'] = $username;
+        $user = $this->field('id,domain')->where($map)->find();
+        return $user;
+    }
+
+    //注册个性域名
+    public function registerDomain($domain) {
+        $data = array(
+            'domain'=>$domain,
+        );
+        $map['id'] = session('user_auth')['id'];
+        return $this->where($map)->save($data);
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}
